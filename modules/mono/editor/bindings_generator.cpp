@@ -1542,9 +1542,8 @@ Error BindingsGenerator::_generate_cs_type(const TypeInterface &itype, const Str
 		output.append("\";\n");
 
 		// Add Emit property
-		output << MEMBER_BEGIN "private SignalEmit _emit;\n"
-			   << MEMBER_BEGIN "/// <summary>A helper to quickly and safely emit signals.</summary>\n"
-			   << MEMBER_BEGIN "public new SignalEmit Emit => _emit \?\?= new(this);\n";
+		output << MEMBER_BEGIN "/// <summary>A helper to quickly and safely emit signals.</summary>\n"
+			   << MEMBER_BEGIN "public new SignalEmit Emit => new(this);\n";
 
 		if (itype.is_instantiable) {
 			// Add native constructor static field
@@ -1767,60 +1766,66 @@ Error BindingsGenerator::_generate_cs_type(const TypeInterface &itype, const Str
 	}
 	output << INDENT1 "}\n";
 
-	//SignalEmit
+	// SignalEmit and ISignalEmit
 	if (!itype.is_singleton) {
 		if (is_inherit) {
-			output << MEMBER_BEGIN "public new class SignalEmit : " << obj_types[itype.base_name].proxy_name << ".SignalEmit\n"
-				   << INDENT1 "{\n";
-			// Generate ctor
-			output << INDENT2 "public SignalEmit(Godot.Object bound) : base(bound) { }\n";
+			output << MEMBER_BEGIN "public new interface ISignalEmit : " << obj_types[itype.base_name].proxy_name << ".ISignalEmit\n"
+				   << INDENT1 "{\n"
+				   << INDENT2 "public Godot.Object Bound { get; init; }"
+				   << INDENT1 "}\n";
+
+			output << MEMBER_BEGIN "public new struct SignalEmit : ISignalEmit\n";
 		} else {
-			output << MEMBER_BEGIN "public class SignalEmit\n"
-				   << INDENT1 "{\n";
-			// Generate bound field and ctor
-			output << INDENT2 "protected Godot.Object bound;\n"
-				   << INDENT2 "public SignalEmit(Godot.Object bound)\n"
-				   << INDENT2 "{\n"
-				   << INDENT3 "this.bound = bound;\n"
-				   << INDENT2 "}\n";
+			output << MEMBER_BEGIN "public interface ISignalEmit\n"
+				   << INDENT1 "{\n"
+				   << INDENT2 "public Godot.Object Bound { get; init; }"
+				   << INDENT1 "}\n";
+
+			output << MEMBER_BEGIN "public struct SignalEmit : ISignalEmit\n";
 		}
-		// Generate SignalEmit's methods
+
+		output << INDENT1 "{\n"
+			   << INDENT2 "public Godot.Object Bound { get; init; }"
+			   << INDENT2 "public SignalEmit(Godot.Object bound)"
+			   << INDENT2 "{"
+			   << INDENT3 "Bound = bound;"
+			   << INDENT2 "}"
+			   << INDENT1 "}\n";
+	}
+
+	output.append(CLOSE_BLOCK /* class */);
+
+	// Generate ISignalEmit Extensions
+	if (!itype.signals_.is_empty()) {
+		output << "public static partial class SignalEmitExtensions\n"
+			   << "{";
+
 		for (const SignalInterface &isignal : itype.signals_) {
 			String arg_sig;
 			String arg_call_sig;
 
 			// Get arguments
-			const ArgumentInterface &first_arg = isignal.arguments.front()->get();
 			for (const ArgumentInterface &iarg : isignal.arguments) {
 				const TypeInterface *arg_type = _get_type_or_null(iarg.type);
 
 				// No need to Add ERR_FAIL_COND's because there already in _generate_cs_signal
-
-				if (&iarg != &first_arg) {
-					arg_sig += ", ";
-				}
-				arg_call_sig += ", ";
-
-				arg_sig += arg_type->cs_type;
-				arg_sig += " ";
-				arg_sig += iarg.name;
-				arg_call_sig += iarg.name;
+				arg_sig += ", " + arg_type->cs_type + " " + iarg.name;
+				arg_call_sig += ", " + iarg.name;
 			}
 
-			output << MEMBER_BEGIN INDENT1 "/// <summary>\n"
+			output << INDENT1 "/// <summary>\n"
 				   << INDENT2 "/// "
 				   << "Raises the"
-				   << "<see cref=\"" BINDINGS_NAMESPACE "." + itype.proxy_name + "." + isignal.proxy_name + "\"/>"
+				   << "<see cref=\"" BINDINGS_NAMESPACE "." << itype.proxy_name << "." << isignal.proxy_name << "\"/>"
 				   << " signal.\n"
-				   << INDENT2 "/// </summary>\n";
-
-			output << INDENT2 "public void " << isignal.proxy_name << "(" << arg_sig << ")"
-				   << " => bound.EmitSignal(\"" << isignal.name << "\"" << arg_call_sig << ");\n";
+				   << INDENT2 "/// </summary>\n"
+				   << INDENT2 "public static void " << isignal.proxy_name << "<T>(this T from" << arg_sig << ") where T : " << itype.proxy_name << ".ISignalEmit\n"
+				   << INDENT2 "{\n"
+				   << INDENT3 "from.Bound.EmitSignal(" << itype.proxy_name << ".SignalName." << isignal.proxy_name << arg_call_sig << ");\n"
+				   << INDENT2 "}\n";
 		}
-		output << INDENT1 "}\n";
+		output << "}\n";
 	}
-
-	output.append(CLOSE_BLOCK /* class */);
 
 	output.append("\n"
 				  "#pragma warning restore CS1591\n"

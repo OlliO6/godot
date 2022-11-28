@@ -81,7 +81,9 @@ namespace Godot.SourceGenerators
 
             bool isInnerClass = symbol.ContainingType != null;
 
-            string uniqueHint = symbol.FullQualifiedName().SanitizeQualifiedNameForUniqueHint()
+            string fullName = symbol.FullQualifiedName();
+
+            string uniqueHint = fullName.SanitizeQualifiedNameForUniqueHint()
                                 + "_ScriptSignals.generated";
 
             var source = new StringBuilder();
@@ -218,51 +220,24 @@ namespace Godot.SourceGenerators
                 source.Append("    }\n");
             }
 
-            // Generate the SignalEmit class
-            source.AppendLine($"    public new class SignalEmit : {symbol.BaseType.FullQualifiedName()}.SignalEmit")
-                    .AppendLine("    {");
+            // Generate the SignalEmit struct and interface
+            source.AppendLine($"    public new interface ISignalEmit : {symbol.BaseType.FullQualifiedName()}.ISignalEmit")
+                    .AppendLine("    {")
+                    .AppendLine($"        public {GodotClasses.Object} Bound {{ get; init; }}")
+                    .AppendLine("    }");
 
-            source.AppendLine($"        public SignalEmit({GodotClasses.Object} bound) : base(bound) {{ }}");
-
-            foreach (var signalDelegate in godotSignalDelegates)
-            {
-                string signalName = signalDelegate.Name;
-                var parameters = signalDelegate.InvokeMethodData.Method.Parameters;
-                string @params = "";
-                string paramsCall = "";
-
-                if (parameters.Length > 0)
-                {
-                    paramsCall += ", ";
-
-                    for (int i = 0; i < parameters.Length; i++)
-                    {
-                        @params += parameters[i].ToString()
-                                + " "
-                                + parameters[i].Name.ToString();
-
-                        paramsCall += parameters[i].Name.ToString();
-
-                        if (i != parameters.Length - 1)
-                        {
-                            @params += ", ";
-                            paramsCall += ", ";
-                        }
-                    }
-                }
-
-                source.AppendLine($"        /// <inheritdoc cref=\"{signalDelegate.DelegateSymbol.FullQualifiedName()}\"/>");
-
-                source.Append($"        public void {signalName}({@params})")
-                        .AppendLine($" => bound.EmitSignal({symbol.NameWithTypeParameters()}.SignalName.{signalName}{paramsCall});");
-            }
-
-            source.AppendLine("    }");
+            source.AppendLine($"    public new struct SignalEmit : ISignalEmit")
+                    .AppendLine("    {")
+                    .AppendLine($"        public {GodotClasses.Object} Bound {{ get; init; }}")
+                    .AppendLine($"        public SignalEmit({GodotClasses.Object} bound)")
+                    .AppendLine("        {")
+                    .AppendLine("            Bound = bound;")
+                    .AppendLine("        }")
+                    .AppendLine("    }");
 
             // Generate the Emit property
-            source.AppendLine("    private SignalEmit _emit;")
-                .AppendLine("    /// <summary>A helper to quickly and safely emit signals.</summary>")
-                .AppendLine("    public new SignalEmit Emit => _emit ??= new(this);");
+            source.AppendLine("    /// <summary>A helper to quickly and safely emit signals.</summary>")
+                    .AppendLine("    public new SignalEmit Emit => new(this);");
 
             source.Append("#pragma warning restore CS0109\n");
 
@@ -333,6 +308,44 @@ namespace Godot.SourceGenerators
             if (hasNamespace)
             {
                 source.Append("\n}\n");
+            }
+
+            // Generate ISignalEmit Extensions
+
+            if (godotSignalDelegates.Count > 0)
+            {
+                source.AppendLine("public static partial class SignalEmitExtensions")
+                        .AppendLine("{");
+
+                foreach (var signalDelegate in godotSignalDelegates)
+                {
+                    string signalName = signalDelegate.Name;
+                    var parameters = signalDelegate.InvokeMethodData.Method.Parameters;
+                    string @params = "";
+                    string paramsCall = "";
+
+                    if (parameters.Length > 0)
+                    {
+                        for (int i = 0; i < parameters.Length; i++)
+                        {
+                            @params += ", "
+                                    + parameters[i].ToString()
+                                    + " "
+                                    + parameters[i].Name.ToString();
+
+                            paramsCall += ", "
+                                    + parameters[i].Name.ToString();
+                        }
+                    }
+
+                    source.AppendLine($"    /// <inheritdoc cref=\"{signalDelegate.DelegateSymbol.FullQualifiedName()}\"/>")
+                            .AppendLine($"    public static void {signalName}<T>(this T from{@params}) where T : {fullName}.ISignalEmit")
+                            .AppendLine("    {")
+                            .AppendLine($"        from.Bound.EmitSignal({fullName}.SignalName.{signalName}{paramsCall});")
+                            .AppendLine("    }");
+                }
+
+                source.Append("}");
             }
 
             context.AddSource(uniqueHint, SourceText.From(source.ToString(), Encoding.UTF8));
